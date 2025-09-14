@@ -1,72 +1,60 @@
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use tokio::sync::mpsc::{UnboundedSender, UnboundedReceiver, unbounded_channel};
-use tokio::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{mpsc::{self, Receiver, Sender, TryRecvError}, Arc, Mutex};
 
-/// A simple in-proc network message.
-#[derive(Clone, Debug)]
-pub struct Message {
-    pub from: String,
-    pub kind: MsgKind,
-    pub payload: Vec<u8>,
-}
+use ed25519_dalek::VerifyingKey;
+use hotstuff_rs::networking::{messages::Message, network::Network};
+use hotstuff_rs::types::{update_sets::ValidatorSetUpdates, validator_set::ValidatorSet};
 
-#[derive(Clone, Debug)]
-pub enum MsgKind {
-    Proposal(u64),
-    Vote(u64),
-    Commit(u64),
-}
-
-/// In-process network: full-mesh map of `peer_id` -> sender.
+/// In-process network implementing the HotStuff Network trait.
 #[derive(Clone)]
 pub struct InProcNet {
-    #[allow(dead_code)]
-    me: String,
-    rx: Arc<Mutex<UnboundedReceiver<Message>>>,
-    peers: Arc<Mutex<BTreeMap<String, UnboundedSender<Message>>>>,
+    me: VerifyingKey,
+    all_peers: HashMap<VerifyingKey, Sender<(VerifyingKey, Message)>>,
+    inbox: Arc<Mutex<Receiver<(VerifyingKey, Message)>>>,
 }
 
 impl InProcNet {
-    /// Create a node's network with its own mailbox; returns (net, my_sender).
-    pub fn new(me: String) -> (Self, UnboundedSender<Message>) {
-        let (tx, rx) = unbounded_channel();
-        (
-            Self {
-                me,
-                rx: Arc::new(Mutex::new(rx)),
-                peers: Arc::new(Mutex::new(BTreeMap::new())),
-            },
-            tx,
-        )
+    /// Create a full-mesh of in-proc nets given iterator of verifying keys.
+    pub fn full_mesh(peers: impl Iterator<Item = VerifyingKey>) -> Vec<InProcNet> {
+        let mut all_peers = HashMap::new();
+        let mut boxes: Vec<(VerifyingKey, Receiver<(VerifyingKey, Message)>)> = Vec::new();
+        let mut keys: Vec<VerifyingKey> = Vec::new();
+        for vk in peers {
+            let (tx, rx) = mpsc::channel();
+            all_peers.insert(vk, tx);
+            boxes.push((vk, rx));
+            keys.push(vk);
+        }
+        boxes
+            .into_iter()
+            .map(|(me, inbox)| InProcNet { me, all_peers: all_peers.clone(), inbox: Arc::new(Mutex::new(inbox)) })
+            .collect()
     }
 
-    /// Connect a remote peer id to its mailbox tx.
-    pub async fn connect(&self, peer_id: String, tx: UnboundedSender<Message>) {
-        self.peers.lock().await.insert(peer_id, tx);
-    }
+    pub fn me(&self) -> VerifyingKey { self.me }
+}
 
-    /// Broadcast a message to all peers (including self if present).
-    pub async fn broadcast(&self, mut msg: Message) {
-        let peers = self.peers.lock().await.clone();
-        for (pid, tx) in peers.into_iter() {
-            let _ = tx.send(Message { from: msg.from.clone(), ..msg.clone() });
-            msg.from = pid.clone(); // keep type happy; not strictly needed
+impl Network for InProcNet {
+    fn init_validator_set(&mut self, _: ValidatorSet) {}
+    fn update_validator_set(&mut self, _: ValidatorSetUpdates) {}
+
+    fn broadcast(&mut self, message: Message) {
+        for (_, peer) in &self.all_peers {
+            let _ = peer.send((self.me, message.clone()));
         }
     }
 
-    /// Send a message to a specific peer.
-    pub async fn send(&self, peer: &str, msg: Message) {
-        if let Some(tx) = self.peers.lock().await.get(peer).cloned() {
-            let _ = tx.send(msg);
+    fn send(&mut self, peer: VerifyingKey, message: Message) {
+        if let Some(tx) = self.all_peers.get(&peer) {
+            let _ = tx.send((self.me, message));
         }
     }
 
-    /// Non-blocking receive. Returns None if no message is available.
-    pub async fn recv(&self) -> Option<Message> {
-        let mut rx = self.rx.lock().await;
-        rx.try_recv().ok()
+    fn recv(&mut self) -> Option<(VerifyingKey, Message)> {
+        match self.inbox.lock().unwrap().try_recv() {
+            Ok(t) => Some(t),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => panic!("in-proc net disconnected"),
+        }
     }
-
-    pub fn me(&self) -> &str { &self.me }
 }

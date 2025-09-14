@@ -397,9 +397,11 @@ name = "hs-demo"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "env_logger",
  "hotstuff_rs",
  "log",
+ "rand_core 0.6.4",
  "thiserror",
  "tokio",
 ]
