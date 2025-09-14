@@ -125,12 +125,12 @@ async fn main() -> Result<()> {
     }
 
     // Connect full mesh
-    for (me, net) in nets.iter() {
+    for net in nets.values() {
         for (peer, tx) in inboxes.iter() {
             // allow self to receive its own broadcast for simplicity
             net.connect(peer.clone(), tx.clone()).await;
         }
-        log::info!("net {} connected to {} peers", me, inboxes.len());
+        log::info!("net {} connected to {} peers", net.me(), inboxes.len());
     }
 
     // Create replicas
@@ -143,7 +143,6 @@ async fn main() -> Result<()> {
             app: CounterApp::new(),
             kv: KVStore::new(),
             net: nets.get(id).unwrap().clone(),
-            peers: leader_order.clone(),
         };
         let ctr = commit_ctr.clone();
         let order = leader_order.clone();
