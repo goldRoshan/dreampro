@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
     let mut replicas: Vec<Replica<KVStore>> = Vec::new();
     for ((kp, net), idx) in keypairs.into_iter().zip(nets.into_iter()).zip(0..) {
         // Per-replica KV and initialization
-        let mut kv = KVStore::new();
+        let kv = KVStore::new();
         Replica::initialize(kv.clone(), init_as.clone(), init_vs_state.clone());
 
         let cfg = Configuration::builder()
