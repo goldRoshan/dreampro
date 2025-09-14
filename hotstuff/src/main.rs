@@ -11,10 +11,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::time::{sleep, Duration, Instant};
 
+use base64::Engine; // for .encode on base64 engines
 use hotstuff_rs::replica::{Configuration, Replica, ReplicaSpec};
-use hotstuff_rs::types::data_types::{BufferSize, ChainID, EpochLength};
+use hotstuff_rs::types::data_types::{BufferSize, ChainID, EpochLength, Power};
 use hotstuff_rs::types::update_sets::{AppStateUpdates, ValidatorSetUpdates};
-use hotstuff_rs::types::validator_set::{Power, SigningKey, ValidatorSet, ValidatorSetState};
+use hotstuff_rs::types::validator_set::{SigningKey, ValidatorSet, ValidatorSetState};
 use rand_core::OsRng;
 
 #[tokio::main(flavor = "multi_thread")]
@@ -70,7 +71,7 @@ async fn main() -> Result<()> {
             .kv_store(kv)
             .configuration(cfg)
             .on_commit_block(move |ev| {
-                log::info!("Committed block: {} at height {}", base64::engine::general_purpose::STANDARD_NO_PAD.encode(ev.block.hash.bytes()), ev.block.height);
+                log::info!("Committed block: {}", base64::engine::general_purpose::STANDARD_NO_PAD.encode(ev.block.bytes()));
                 ctr.fetch_add(1, Ordering::Relaxed);
             })
             .build()

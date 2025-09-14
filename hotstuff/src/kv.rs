@@ -37,9 +37,7 @@ impl HsKVStore for KVStore {
         self.0.write().unwrap().clear();
     }
 
-    fn snapshot<'b>(&'b self) -> Self::Snapshot<'_> {
-        Snapshot(self.0.read().unwrap().clone())
-    }
+    fn snapshot<'b>(&'b self) -> Self::Snapshot<'b> { Snapshot(self.0.read().unwrap().clone()) }
 }
 
 #[derive(Clone)]

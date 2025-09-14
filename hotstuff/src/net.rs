@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{mpsc::{self, Receiver, Sender, TryRecvError}, Arc, Mutex};
 
-use ed25519_dalek::VerifyingKey;
+use hotstuff_rs::types::crypto_primitives::VerifyingKey;
 use hotstuff_rs::networking::{messages::Message, network::Network};
 use hotstuff_rs::types::{update_sets::ValidatorSetUpdates, validator_set::ValidatorSet};
 
