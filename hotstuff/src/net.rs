@@ -16,19 +16,12 @@ pub enum MsgKind {
     Proposal(u64),
     Vote(u64),
     Commit(u64),
-    Ping,
-}
-
-/// A handle to a peer mailbox.
-#[derive(Clone)]
-pub struct PeerTx {
-    pub peer_id: String,
-    pub tx: UnboundedSender<Message>,
 }
 
 /// In-process network: full-mesh map of `peer_id` -> sender.
 #[derive(Clone)]
 pub struct InProcNet {
+    #[allow(dead_code)]
     me: String,
     rx: Arc<Mutex<UnboundedReceiver<Message>>>,
     peers: Arc<Mutex<BTreeMap<String, UnboundedSender<Message>>>>,
@@ -77,4 +70,3 @@ impl InProcNet {
 
     pub fn me(&self) -> &str { &self.me }
 }
-

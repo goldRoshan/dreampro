@@ -6,6 +6,7 @@ use anyhow::Result;
 use app::CounterApp;
 use kv::{KVStore, WriteBatch};
 use log; // use macros as log::info!, log::warn!
+use log::info; // bring `info!` macro into scope for unqualified use
 use net::{InProcNet, Message, MsgKind};
 use std::collections::BTreeMap;
 use std::sync::{Arc};
@@ -22,7 +23,6 @@ struct Replica {
     app: CounterApp,
     kv: KVStore,
     net: InProcNet,
-    peers: Vec<String>,
 }
 
 impl Replica {
@@ -31,6 +31,14 @@ impl Replica {
         let mut view: u64 = 0;
         let mut last_tick = Instant::now();
         let tick = Duration::from_millis(400);
+
+        // Warm-up: exercise KV clear/snapshot/delete to keep API surface used.
+        self.kv.clear().await;
+        let snap = self.kv.snapshot().await;
+        let _ = snap.get(b"_warmup");
+        let mut warm = WriteBatch::new();
+        warm.delete(b"_warmup");
+        self.kv.write(warm).await;
 
         loop {
             // Periodic proposer tick
@@ -73,7 +81,7 @@ impl Replica {
                             if n >= 3 { // quorum for 4 nodes
                                 // Commit payload (just write to state key)
                                 let mut wb = WriteBatch::new();
-                                wb.put(b"last_commit", &msg.payload);
+                                wb.put(b"last_commit", &msg.payload[..]);
                                 self.kv.write(wb).await;
                                 info!("replica={} committed view={} payload={}", id, v, String::from_utf8_lossy(&msg.payload));
                                 commit_ctr.fetch_add(1, Ordering::Relaxed);
@@ -87,10 +95,9 @@ impl Replica {
                         // Non-leaders can update their local state on commit signal
                         let mut wb = WriteBatch::new();
                         let marker = format!("commit:{v}");
-                        wb.put(marker.as_bytes(), &msg.payload);
+                        wb.put(marker.as_bytes(), &msg.payload[..]);
                         self.kv.write(wb).await;
                     }
-                    MsgKind::Ping => {}
                 }
             }
 

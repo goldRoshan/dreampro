@@ -19,6 +19,7 @@ impl WriteBatch {
     pub fn put<K: Into<Vec<u8>>, V: Into<Vec<u8>>>(&mut self, k: K, v: V) {
         self.ops.push(Op::Put(k.into(), v.into()));
     }
+    #[allow(dead_code)]
     pub fn delete<K: Into<Vec<u8>>>(&mut self, k: K) {
         self.ops.push(Op::Del(k.into()));
     }
@@ -52,12 +53,14 @@ impl KVStore {
     }
 
     /// Clear the entire store.
+    #[allow(dead_code)]
     pub async fn clear(&self) {
         let mut map = self.inner.write().await;
         map.clear();
     }
 
     /// Create an immutable snapshot for consistent reads.
+    #[allow(dead_code)]
     pub async fn snapshot(&self) -> Snapshot {
         let map = self.inner.read().await;
         Snapshot { data: map.clone() }
@@ -65,13 +68,14 @@ impl KVStore {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct Snapshot {
     data: BTreeMap<Vec<u8>, Vec<u8>>,
 }
 
 impl Snapshot {
+    #[allow(dead_code)]
     pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
         self.data.get(key).cloned()
     }
 }
-

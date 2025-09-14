@@ -22,7 +22,5 @@ impl CounterApp {
     /// Validate a block payload (accepts all for demo).
     pub fn validate_block(&self, _data: &[u8]) -> bool { true }
 
-    /// Validate block for sync (same as validate for this demo).
-    pub fn validate_block_for_sync(&self, data: &[u8]) -> bool { self.validate_block(data) }
+    // For a full HotStuff integration, add sync-specific validation here if required.
 }
-
