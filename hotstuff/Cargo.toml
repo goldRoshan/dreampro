@@ -8,7 +8,6 @@ anyhow = "1"
 thiserror = "1"
 log = "0.4"
 env_logger = "0.11"
-<<<<<<< HEAD
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "net", "io-util"] }
 
 # Included per requirements; not used directly in this demo path.
@@ -24,13 +23,4 @@ utoipa = { version = "4", features = ["axum_extras", "yaml", "uuid"] }
 utoipa-swagger-ui = { version = "7", features = ["axum"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-=======
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
-
-# Included per requirements; not used directly in this demo path.
-hotstuff_rs = "0.4"
-
-[profile.release]
-opt-level = 3
-
->>>>>>> 5f9cdcd (Move demo into hotstuff/ subfolder and add root workspace manifest)
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }

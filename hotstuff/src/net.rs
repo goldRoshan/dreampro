@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 use std::{io, net::SocketAddr, sync::{Arc, Mutex}};
 use std::collections::HashMap;
 
@@ -6,6 +5,7 @@ use std::collections::HashMap;
 use hotstuff_rs::networking::{messages::Message, network::Network};
 use hotstuff_rs::types::{update_sets::ValidatorSetUpdates, validator_set::{ValidatorSet, VerifyingKey}};
 use tokio::{net::{TcpListener, TcpStream}, io::{AsyncReadExt, AsyncWriteExt}, sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel}};
+use base64::Engine;
 
 /// TCP network implementing the HotStuff Network trait with Borsh serialization.
 #[derive(Clone)]
@@ -36,13 +36,14 @@ impl InProcNet {
         log::info!("network: added outbound channel (total={})", total);
     }
 
+    #[allow(dead_code)]
+    pub fn me(&self) -> VerifyingKey { self.me }
+
     // Once we learn the peer vk, map it to an existing tx (used for unicast send)
     pub async fn map_peer_vk(&self, vk: VerifyingKey, tx: UnboundedSender<(VerifyingKey, Message)>) {
         self.peers_by_vk.lock().unwrap().insert(vk, tx);
+        log::info!("network: mapped peer vk {}", base64::engine::general_purpose::STANDARD_NO_PAD.encode(vk.to_bytes()));
     }
-
-    #[allow(dead_code)]
-    pub fn me(&self) -> VerifyingKey { self.me }
 }
 
 impl Network for InProcNet {
@@ -55,10 +56,15 @@ impl Network for InProcNet {
         for tx in self.peers.lock().unwrap().iter() { let _ = tx.send((self.me, message.clone())); }
     }
 
-    fn send(&mut self, _peer: VerifyingKey, message: Message) {
-        // Safety-first: broadcast to ensure delivery even if vk mapping is incomplete
-        let _ = self.local_tx.send((self.me, message.clone()));
-        for tx in self.peers.lock().unwrap().iter() { let _ = tx.send((self.me, message.clone())); }
+    fn send(&mut self, peer: VerifyingKey, message: Message) {
+        if let Some(tx) = self.peers_by_vk.lock().unwrap().get(&peer).cloned() {
+            let _ = tx.send((self.me, message));
+        } else {
+            // fallback: broadcast
+            log::warn!("network: unicast vk unknown, broadcasting instead");
+            let _ = self.local_tx.send((self.me, message.clone()));
+            for tx in self.peers.lock().unwrap().iter() { let _ = tx.send((self.me, message.clone())); }
+        }
     }
 
     fn recv(&mut self) -> Option<(VerifyingKey, Message)> {
@@ -136,85 +142,3 @@ pub async fn connect_peer(addr: SocketAddr) -> io::Result<UnboundedSender<(Verif
     });
     Ok(tx)
 }
-=======
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use tokio::sync::mpsc::{UnboundedSender, UnboundedReceiver, unbounded_channel};
-use tokio::sync::Mutex;
-
-/// A simple in-proc network message.
-#[derive(Clone, Debug)]
-pub struct Message {
-    pub from: String,
-    pub kind: MsgKind,
-    pub payload: Vec<u8>,
-}
-
-#[derive(Clone, Debug)]
-pub enum MsgKind {
-    Proposal(u64),
-    Vote(u64),
-    Commit(u64),
-    Ping,
-}
-
-/// A handle to a peer mailbox.
-#[derive(Clone)]
-pub struct PeerTx {
-    pub peer_id: String,
-    pub tx: UnboundedSender<Message>,
-}
-
-/// In-process network: full-mesh map of `peer_id` -> sender.
-#[derive(Clone)]
-pub struct InProcNet {
-    me: String,
-    rx: Arc<Mutex<UnboundedReceiver<Message>>>,
-    peers: Arc<Mutex<BTreeMap<String, UnboundedSender<Message>>>>,
-}
-
-impl InProcNet {
-    /// Create a node's network with its own mailbox; returns (net, my_sender).
-    pub fn new(me: String) -> (Self, UnboundedSender<Message>) {
-        let (tx, rx) = unbounded_channel();
-        (
-            Self {
-                me,
-                rx: Arc::new(Mutex::new(rx)),
-                peers: Arc::new(Mutex::new(BTreeMap::new())),
-            },
-            tx,
-        )
-    }
-
-    /// Connect a remote peer id to its mailbox tx.
-    pub async fn connect(&self, peer_id: String, tx: UnboundedSender<Message>) {
-        self.peers.lock().await.insert(peer_id, tx);
-    }
-
-    /// Broadcast a message to all peers (including self if present).
-    pub async fn broadcast(&self, mut msg: Message) {
-        let peers = self.peers.lock().await.clone();
-        for (pid, tx) in peers.into_iter() {
-            let _ = tx.send(Message { from: msg.from.clone(), ..msg.clone() });
-            msg.from = pid.clone(); // keep type happy; not strictly needed
-        }
-    }
-
-    /// Send a message to a specific peer.
-    pub async fn send(&self, peer: &str, msg: Message) {
-        if let Some(tx) = self.peers.lock().await.get(peer).cloned() {
-            let _ = tx.send(msg);
-        }
-    }
-
-    /// Non-blocking receive. Returns None if no message is available.
-    pub async fn recv(&self) -> Option<Message> {
-        let mut rx = self.rx.lock().await;
-        rx.try_recv().ok()
-    }
-
-    pub fn me(&self) -> &str { &self.me }
-}
-
->>>>>>> 5f9cdcd (Move demo into hotstuff/ subfolder and add root workspace manifest)

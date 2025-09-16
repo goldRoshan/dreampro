@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 use std::sync::{Arc, Mutex};
 
 use hotstuff_rs::app::{App, ProduceBlockRequest, ProduceBlockResponse, ValidateBlockRequest, ValidateBlockResponse};
@@ -10,9 +9,13 @@ use hotstuff_rs::types::data_types::Power;
 use base64::Engine;
 use std::collections::{BTreeMap, HashSet};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 /// Order payload submitted by users and gossiped between nodes.
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct OrderInput { pub symbol: String, pub side: String, pub position: u64, pub price: f64 }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Order {
     pub id: Uuid,
@@ -22,16 +25,18 @@ pub struct Order {
     pub position: u64,
 }
 
+impl Order { pub fn from_input(i: OrderInput) -> Self { Self { id: Uuid::new_v4(), symbol: i.symbol, price: i.price, side: i.side, position: i.position } } }
+
 /// Minimal order-book App: collects orders and commits them in blocks.
 #[derive(Clone, Default)]
-pub struct CounterApp {
+pub struct OrderbookApp {
     pub orders: Arc<Mutex<Vec<Order>>>,
     pub vs_inserts: Arc<Mutex<Vec<(VerifyingKey, Power)>>>,
     pub vs_deletes: Arc<Mutex<Vec<VerifyingKey>>>,
     pub seen_ids: Arc<Mutex<HashSet<Uuid>>>,
 }
 
-impl CounterApp { pub fn new() -> Self { Self { orders: Arc::new(Mutex::new(Vec::new())), vs_inserts: Arc::new(Mutex::new(Vec::new())), vs_deletes: Arc::new(Mutex::new(Vec::new())), seen_ids: Arc::new(Mutex::new(HashSet::new())) } } }
+impl OrderbookApp { pub fn new() -> Self { Self { orders: Arc::new(Mutex::new(Vec::new())), vs_inserts: Arc::new(Mutex::new(Vec::new())), vs_deletes: Arc::new(Mutex::new(Vec::new())), seen_ids: Arc::new(Mutex::new(HashSet::new())) } } }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct BlockPayloadSerde {
@@ -42,16 +47,12 @@ struct BlockPayloadSerde {
 
 fn key_buy(symbol: &str) -> Vec<u8> { format!("book:{}:buy", symbol).into_bytes() }
 fn key_sell(symbol: &str) -> Vec<u8> { format!("book:{}:sell", symbol).into_bytes() }
+const KEY_SYMBOLS: &[u8] = b"book::symbols";
 
-fn sort_orders_by_price(orders: &mut Vec<Order>, side: &str) {
-    if side.eq_ignore_ascii_case("buy") {
-        orders.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap());
-    } else {
-        orders.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap());
-    }
-}
+fn price_key(price: f64) -> i64 { (price * 1_000_000.0).round() as i64 }
+// price_from_key not needed currently; convert inline when responding via API
 
-impl<K: HsKVStore> App<K> for CounterApp {
+impl<K: HsKVStore> App<K> for OrderbookApp {
     fn produce_block(&mut self, request: ProduceBlockRequest<K>) -> ProduceBlockResponse {
         // Drain pending orders and VS updates; sort deterministically for stability.
         let mut drained = {
@@ -91,23 +92,42 @@ impl<K: HsKVStore> App<K> for CounterApp {
         let mut vsu = ValidatorSetUpdates::new();
         for (vk, p) in drained_inserts { vsu.insert(vk, p); }
         for vk in drained_deletes { vsu.delete(vk); }
-        // Build app state updates: merge drained orders into existing committed order book state keys
+        // Build app state updates: aggregate orders into price levels per side
         let mut app_updates = AppStateUpdates::new();
         if !drained.is_empty() {
-            // Group by (symbol, side)
+            // existing symbols
+            let mut symbols: Vec<String> = request
+                .block_tree()
+                .app_state(KEY_SYMBOLS)
+                .and_then(|b| serde_json::from_slice::<Vec<String>>(&b).ok())
+                .unwrap_or_default();
+
+            // group by (symbol, side)
             let mut groups: BTreeMap<(String, String), Vec<Order>> = BTreeMap::new();
             for o in drained.into_iter() {
+                if !symbols.contains(&o.symbol) { symbols.push(o.symbol.clone()); }
                 groups.entry((o.symbol.clone(), o.side.clone())).or_default().push(o);
             }
-            // Merge with committed state from block tree snapshot available in produce
-            for ((symbol, side), mut new_orders) in groups.into_iter() {
+            symbols.sort();
+            app_updates.insert(KEY_SYMBOLS.to_vec(), serde_json::to_vec(&symbols).unwrap());
+
+            for ((symbol, side), new_orders) in groups.into_iter() {
                 let key = if side.eq_ignore_ascii_case("buy") { key_buy(&symbol) } else { key_sell(&symbol) };
-                let mut combined: Vec<Order> = if let Some(bytes) = request.block_tree().app_state(&key) {
-                    serde_json::from_slice::<Vec<Order>>(&bytes).unwrap_or_default()
-                } else { Vec::new() };
-                combined.append(&mut new_orders);
-                sort_orders_by_price(&mut combined, &side);
-                app_updates.insert(key, serde_json::to_vec(&combined).unwrap());
+                // prior aggregated levels (price ticks as i64 keys)
+                let mut levels: BTreeMap<i64, u64> = request
+                    .block_tree()
+                    .app_state(&key)
+                    .and_then(|b| serde_json::from_slice::<Vec<(i64, u64)>>(&b).ok())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect::<BTreeMap<_, _>>();
+                for o in new_orders.into_iter() {
+                    *levels.entry(price_key(o.price)).or_insert(0) += o.position as u64;
+                }
+                // sort into vec
+                let mut vec_levels: Vec<(i64, u64)> = levels.into_iter().collect();
+                if side.eq_ignore_ascii_case("buy") { vec_levels.sort_by(|a, b| b.0.cmp(&a.0)); } else { vec_levels.sort_by(|a, b| a.0.cmp(&b.0)); }
+                app_updates.insert(key, serde_json::to_vec(&vec_levels).unwrap());
             }
         }
         ProduceBlockResponse { data_hash, data, app_state_updates: Some(app_updates), validator_set_updates: Some(vsu) }
@@ -165,14 +185,22 @@ impl<K: HsKVStore> App<K> for CounterApp {
                 for o in obj.orders.into_iter() {
                     groups.entry((o.symbol.clone(), o.side.clone())).or_default().push(o);
                 }
-                for ((symbol, side), mut new_orders) in groups.into_iter() {
+                for ((symbol, side), new_orders) in groups.into_iter() {
                     let key = if side.eq_ignore_ascii_case("buy") { key_buy(&symbol) } else { key_sell(&symbol) };
-                    let mut combined: Vec<Order> = if let Some(bytes) = request.block_tree().app_state(&key) {
-                        serde_json::from_slice::<Vec<Order>>(&bytes).unwrap_or_default()
-                    } else { Vec::new() };
-                    combined.append(&mut new_orders);
-                    sort_orders_by_price(&mut combined, &side);
-                    asu.insert(key, serde_json::to_vec(&combined).unwrap());
+                    // prior aggregated levels (price ticks)
+                    let mut levels: BTreeMap<i64, u64> = request
+                        .block_tree()
+                        .app_state(&key)
+                        .and_then(|b| serde_json::from_slice::<Vec<(i64, u64)>>(&b).ok())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .collect::<BTreeMap<_, _>>();
+                    for o in new_orders.into_iter() {
+                        *levels.entry(price_key(o.price)).or_insert(0) += o.position as u64;
+                    }
+                    let mut vec_levels: Vec<(i64, u64)> = levels.into_iter().collect();
+                    if side.eq_ignore_ascii_case("buy") { vec_levels.sort_by(|a, b| b.0.cmp(&a.0)); } else { vec_levels.sort_by(|a, b| a.0.cmp(&b.0)); }
+                    asu.insert(key, serde_json::to_vec(&vec_levels).unwrap());
                 }
             }}
             ValidateBlockResponse::Valid { app_state_updates: Some(asu), validator_set_updates: Some(vsu) }
@@ -183,7 +211,7 @@ impl<K: HsKVStore> App<K> for CounterApp {
     }
 }
 
-impl CounterApp {
+impl OrderbookApp {
     pub fn submit_order(&self, o: Order) {
         let mut seen = self.seen_ids.lock().unwrap();
         if seen.insert(o.id) {
@@ -195,6 +223,7 @@ impl CounterApp {
         }
     }
 
+    #[allow(dead_code)]
     pub fn add_validator(&self, vk: VerifyingKey, power: Power) {
         self.vs_inserts.lock().unwrap().push((vk, power));
     }
@@ -203,33 +232,3 @@ impl CounterApp {
         self.vs_deletes.lock().unwrap().push(vk);
     }
 }
-=======
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-/// Minimal deterministic app used by the demo.
-#[derive(Clone)]
-pub struct CounterApp {
-    counter: Arc<AtomicU64>,
-}
-
-impl CounterApp {
-    pub fn new() -> Self {
-        Self { counter: Arc::new(AtomicU64::new(0)) }
-    }
-
-    /// Produce a small, deterministic payload.
-    pub fn produce_block(&self) -> Vec<u8> {
-        // Deterministic increment; monotonic per-process.
-        let v = self.counter.fetch_add(1, Ordering::Relaxed);
-        format!("tick-{v}").into_bytes()
-    }
-
-    /// Validate a block payload (accepts all for demo).
-    pub fn validate_block(&self, _data: &[u8]) -> bool { true }
-
-    /// Validate block for sync (same as validate for this demo).
-    pub fn validate_block_for_sync(&self, data: &[u8]) -> bool { self.validate_block(data) }
-}
-
->>>>>>> 5f9cdcd (Move demo into hotstuff/ subfolder and add root workspace manifest)
