@@ -96,8 +96,16 @@ async fn main() -> Result<()> {
                 match connect_peer(peer).await {
                     Ok(tx) => {
                         net_clone.add_outbound(tx.clone()).await;
-                        if let Some(vk) = discover_peer_vk(&http_url).await {
-                            net_clone.map_peer_vk(vk, tx).await;
+                        // Keep trying to discover vk until success, then map and exit
+                        loop {
+                            if let Some(vk) = discover_peer_vk(&http_url).await {
+                                log::info!("discovered peer vk {} at {}", base64::engine::general_purpose::STANDARD_NO_PAD.encode(vk.to_bytes()), http_url);
+                                net_clone.map_peer_vk(vk, tx.clone()).await;
+                                break;
+                            } else {
+                                log::debug!("peer vk discovery pending at {}", http_url);
+                            }
+                            tokio::time::sleep(Duration::from_millis(500)).await;
                         }
                         break;
                     }
@@ -108,31 +116,22 @@ async fn main() -> Result<()> {
     }
 
     async fn discover_peer_vk(url: &str) -> Option<VerifyingKey> {
-        // naive TCP GET to avoid extra deps
-        if let Some(host) = url.strip_prefix("http://") {
-            let mut parts = host.splitn(2, ':');
-            let host_part = parts.next()?;
-            let port_part = parts.next()?;
-            let addr = format!("{}:{}", host_part, port_part);
-            if let Ok(mut stream) = tokio::net::TcpStream::connect(&addr).await {
-                let req = format!("GET /me/vk HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", host_part);
-                use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                if stream.write_all(req.as_bytes()).await.is_ok() {
-                    let mut buf = vec![0u8; 4096];
-                    if let Ok(n) = tokio::time::timeout(Duration::from_secs(1), stream.read(&mut buf)).await.ok()? {
-                        let s = String::from_utf8_lossy(&buf[..n]);
-                        if let Some(body) = s.rsplit("\r\n").next() {
-                            if let Ok(bytes) = base64::engine::general_purpose::STANDARD_NO_PAD.decode(body.trim()) {
-                                if bytes.len() == 32 {
-                                    if let Ok(vk) = VerifyingKey::from_bytes(&bytes[..].try_into().ok()?) { return Some(vk); }
-                                }
-                            }
+        // Use reqwest to avoid chunked parsing issues
+        let full = format!("{}/me/vk", url.trim_end_matches('/'));
+        match reqwest::get(&full).await {
+            Ok(resp) => match resp.text().await {
+                Ok(text) => {
+                    if let Ok(bytes) = base64::engine::general_purpose::STANDARD_NO_PAD.decode(text.trim()) {
+                        if bytes.len() == 32 {
+                            if let Ok(vk) = VerifyingKey::from_bytes(&bytes[..].try_into().ok()?) { return Some(vk); }
                         }
                     }
+                    None
                 }
-            }
+                Err(_) => None,
+            },
+            Err(_) => None,
         }
-        None
     }
 
     // 4) Build replica

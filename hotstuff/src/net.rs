@@ -61,7 +61,7 @@ impl Network for InProcNet {
             let _ = tx.send((self.me, message));
         } else {
             // fallback: broadcast
-            log::warn!("network: unicast vk unknown, broadcasting instead");
+            log::debug!("network: unicast vk unknown, broadcasting instead");
             let _ = self.local_tx.send((self.me, message.clone()));
             for tx in self.peers.lock().unwrap().iter() { let _ = tx.send((self.me, message.clone())); }
         }
