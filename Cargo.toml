@@ -1,6 +1,10 @@
 [workspace]
 members = ["hotstuff"]
+<<<<<<< HEAD
 resolver = "2"
 
 [profile.release]
 opt-level = 3
+=======
+
+>>>>>>> 5f9cdcd (Move demo into hotstuff/ subfolder and add root workspace manifest)
